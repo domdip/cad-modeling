@@ -22,29 +22,6 @@ from . import box
 from adsk.core import ValueInput, Application, Point3D
 from adsk.fusion import DimensionOrientations
 
-#Keep track of value in cm as well as parameter name
-class Val(object):
-    def __init__(self, name, value):
-        self.name = name
-        self.value = value
-
-    def __mul__(self, other):
-        return Val(self.name + " * " + str(other), self.value * other)
-
-    def __truediv__(self, other):
-        return Val(self.name + " / " + str(other), self.value / other)
-
-    def __neg__(self):
-        return Val("-" + self.name, -self.value)
-
-    def __repr__(self):
-        return "Val(" + self.name + "," + str(self.value) + ")"
-
-
-def sketch_point_coords(sp):
-    sp_coords = sp.worldGeometry.asArray()
-    return tuple(sp_coords[0:3])
-
 
 class BoxMaker(object):
     def __init__(self):
@@ -90,6 +67,7 @@ class BoxMaker(object):
         self.sketch = sketches.add(xyPlane)
         self.sketch_points = self.sketch.sketchPoints
         self.origin = self.sketch_points.add(Point3D.create(0, 0, 0))
+        self.origin.isFixed = True
 
     @property
     def lines(self):
@@ -97,54 +75,84 @@ class BoxMaker(object):
             self.__lines = self.sketch.sketchCurves.sketchLines
         return self.__lines
 
-    def draw_line(self, fromX, fromY, toX, toY):
-        self.lines.addByTwoPoints(
-            adsk.core.Point3D.create(fromX, fromY, 0),
-            adsk.core.Point3D.create(toX, toY, 0))
+    def draw_constrained_point(self, source, dist_x, dist_y):
+        (x0, y0, z) = sketch_point_coords(source)
+        x = x0 if not dist_x else x0 + dist_x.value
+        y = y0 if not dist_y else y0 + dist_y.value
 
-    def draw_vertical_line(self, fromX, fromY, length, param_constraint=None):
-        vert_line = self.lines.addByTwoPoints(
-            adsk.core.Point3D.create(fromX, fromY, 0),
-            adsk.core.Point3D.create(fromX, fromY + length, 0))
-        self.sketch.geometricConstraints.addVertical(vert_line)
-        dim = self.sketch.sketchDimensions.addDistanceDimension(
-            vert_line.startSketchPoint, vert_line.endSketchPoint,
-            adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
-            adsk.core.Point3D.create(fromX - 1, fromY + 0.5 * length, 0))
-        if param_constraint:
-            dim.parameter.expression = param_constraint
+        if x == x0 and y == y0:  #noop
+            return source
+
+        dest = self.sketch_points.add(Point3D.create(x, y, z))
+
+        if dist_x:
+            dim = self.sketch.sketchDimensions.addDistanceDimension(
+                source, dest,
+                DimensionOrientations.HorizontalDimensionOrientation,
+                Point3D.create(x + 0.5 * dist_x.value, y - 1, z))
+            dim.parameter.expression = "abs(" + dist_x.name + ")"
         else:
-            dim.parameter.expression = str(length)
+            self.sketch.geometricConstraints.addVerticalPoints(source, dest)
 
-    def draw_vert(self, source, dist):
-        (x, y, z) = sketch_point_coords(source)
-        dest = self.sketch_points.add(Point3D.create(x, y + dist.value, z))
-        line = self.lines.addByTwoPoints(source, dest)
-        self.sketch.geometricConstraints.addVertical(line)
-        dim = self.sketch.sketchDimensions.addDistanceDimension(
-            source, dest, DimensionOrientations.VerticalDimensionOrientation,
-            Point3D.create(x - 1, y + 0.5 * dist.value, z))
-        dim.parameter.expression = dist.name
+        if dist_y:
+            dim = self.sketch.sketchDimensions.addDistanceDimension(
+                source, dest,
+                DimensionOrientations.VerticalDimensionOrientation,
+                Point3D.create(x - 1, y + 0.5 * dist_y.value, z))
+            dim.parameter.expression = "abs(" + dist_y.name + ")"
+        else:
+            self.sketch.geometricConstraints.addHorizontalPoints(source, dest)
+
+        return dest
+
+    def draw_constrained_line(self, source, dist_x, dist_y):
+        dest = self.draw_constrained_point(source, dist_x, dist_y)
+        self.lines.addByTwoPoints(source, dest)
         return dest
 
     def draw_horiz(self, source, dist):
-        (x, y, z) = sketch_point_coords(source)
-        dest = self.sketch_points.add(Point3D.create(x + dist.value, y, z))
-        line = self.lines.addByTwoPoints(source, dest)
-        self.sketch.geometricConstraints.addHorizontal(line)
-        dim = self.sketch.sketchDimensions.addDistanceDimension(
-            source, dest, DimensionOrientations.HorizontalDimensionOrientation,
-            Point3D.create(x + 0.5 * dist.value, y - 1, z))
-        dim.parameter.expression = dist.name
-        return dest
+        return self.draw_constrained_line(source, dist, None)
+
+    def draw_vert(self, source, dist):
+        return self.draw_constrained_line(source, None, dist)
 
     def draw_vertical_edge(self, ref_point, notch_width, notch_count,
-                           notch_height, smallside):
-        coords = sketch_point_coords(ref_point)
+                           notch_height, hug_left, hug_down):
 
-        point = self.draw_vert(ref_point, notch_width)
-        point = self.draw_horiz(point, notch_height)
-        point = self.draw_vert(point, notch_width)
+        #Adjust initial point
+        dist_x = None if hug_left else notch_height
+        dist_y = None if hug_down else notch_width
+        last_point = self.draw_constrained_point(ref_point, dist_x, dist_y)
+
+        for notch in range(0, notch_count):
+            if notch == 0:
+                if hug_down:
+                    last_point = self.draw_vert(last_point,
+                                                notch_width + notch_height)
+                else:
+                    last_point = self.draw_vert(last_point, notch_width)
+            else:
+                last_point = self.draw_vert(last_point, notch_width)
+
+            dist_x = notch_height if hug_left else -notch_height
+            last_point = self.draw_horiz(last_point, dist_x)
+
+            last_point = self.draw_vert(last_point, notch_width)
+
+            dist_x = -notch_height if hug_left else notch_height
+            last_point = self.draw_horiz(last_point, dist_x)
+
+            if notch == notch_count - 1:
+                if hug_down:
+                    last_point = self.draw_vert(last_point,
+                                                notch_width + notch_height)
+                else:
+                    last_point = self.draw_vert(last_point, notch_width)
+
+        return last_point
+        # point = self.draw_vert2(ref_point, notch_width)
+        # point = self.draw_horiz2(point, notch_height)
+        # point = self.draw_vert2(point, notch_width)
 
     def closest_odd(self, number):
         '''
@@ -171,8 +179,8 @@ def run(context):
         # box_maker.draw_line(0, 0, 100, 20)
         # box_maker.draw_vertical_line(0, 5, 20, "Length")
 
-        box_maker.draw_vertical_edge(box_maker.origin, box_maker.tab_width, 2,
-                                     box_maker.thickness, False)
+        box_maker.draw_vertical_edge(box_maker.origin, box_maker.tab_width * 3,
+                                     1, box_maker.thickness * 3, False, False)
 
         ui.messageBox('Huh')
 
