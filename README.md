@@ -26,7 +26,7 @@ Most existing box generators yield output in PDF, SVG, or DXF output.  However, 
 
 Fusion 360 is very useful but complicated sketches require a lot of manual input.  It was chosen in large part because of its support for parameterized modeling.
 
-This motivates the use of the Fusion 360 API.  However, usage of the API can sometimes be laggy and unpredictable.  For instance, a bad import will result in silent failure, and large sketches can cause slowness or crashes.  Hence it is useful to prototype models in pure Python before converting them to corresponding Fusion 360 objects via the API.
+This motivates the use of the Fusion 360 API.  However, the API can be laggy and unpredictable.  For instance, a bad import will result in silent failure, and large sketches can cause slowness or crashes.  Hence it is useful to prototype models in pure Python before converting them to corresponding Fusion 360 objects via the API.
 
 The eventual goal of this project is code that generates fully parameterized models with appropriate constraints.  This would combine the rigor of API-generated models with the flexibility of modifying parameters and reshaping models within the Fusion 360 UI.  However, at the moment it does not pass any constraints or parameters to Fusion 360 - all parameter modification must be done within Python, and the script must be re-run to reflect the changes.
 
